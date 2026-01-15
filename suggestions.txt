@@ -1,0 +1,23 @@
+The configuration value of bicep.use_binary_from_path has been set to 'false'.
+/home/cloud/smartcity.bicep(46,19) : Warning use-resource-symbol-reference: Use a resource reference instead of invoking function "listKeys". This simplifies the syntax and allows Bicep to better understand your deployment dependency graph. [https://aka.ms/bicep/linter-diagnostics#use-resource-symbol-reference]
+/home/cloud/smartcity.bicep(65,9) : Warning use-parent-property: Resource "eh_traffic" has its name formatted as a child of resource "ehn". The syntax can be simplified by using the parent property. [https://aka.ms/bicep/linter-diagnostics#use-parent-property]
+/home/cloud/smartcity.bicep(74,9) : Warning use-parent-property: Resource "eh_weather" has its name formatted as a child of resource "ehn". The syntax can be simplified by using the parent property. [https://aka.ms/bicep/linter-diagnostics#use-parent-property]
+/home/cloud/smartcity.bicep(109,9) : Warning use-parent-property: Resource "kvSecretEH" has its name formatted as a child of resource "kv". The syntax can be simplified by using the parent property. [https://aka.ms/bicep/linter-diagnostics#use-parent-property]
+/home/cloud/smartcity.bicep(119,9) : Warning use-parent-property: Resource "kvSecretStorage" has its name formatted as a child of resource "kv". The syntax can be simplified by using the parent property. [https://aka.ms/bicep/linter-diagnostics#use-parent-property]
+
+
+az deployment group create \
+  --resource-group umnovodb \
+  --template-file smartcity.bicep \
+  --parameters ownerName="dacio5"
+
+
+az ad sp create --id b677c290-cf4b-4a8e-a60e-91ba650a4abe
+
+az role assignment create \
+  --role "Key Vault Secrets User" \
+  --assignee "2ff814a6-3304-4ab8-85cb-cd0e6f879c1d" \
+  --scope "/subscriptions/0dfe3746-5242-4130-b328-ce9a8258cdd1/resourceGroups/umnovodb/providers/Microsoft.KeyVault/vaults/kv-smartcity-dacio5"
+
+
+azure-eventhub==5.11.4  geopy==2.4.0  folium==0.14.0  mlflow>=2.10.0

@@ -47,6 +47,7 @@ for container in container_names:
     mount_container(container)
 
 # COMMAND ----------
+#####
 
 # Verify mounts
 display(dbutils.fs.mounts())

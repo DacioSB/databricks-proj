@@ -190,5 +190,29 @@ class TrafficSimulator:
             district=intersection.district
         )
 
+class EventHubPublisher:
+    """Publishes traffic data to Azure Event Hubs"""
+    def __init__(self, event_hub_conn_string: str, event_hub_name: str):
+        self.producer = EventHubProducerClient.from_connection_string(
+            conn_str=event_hub_conn_string,
+            eventhub_name=event_hub_name
+        )
+    def send_batch(self, readings: List[TrafficReading]):
+        """Send batch of readings to Event Hub"""
+        event_data_batch = self.producer.create_batch()
 
-        
+        for reading in readings:
+            event_data = EventData(json.dumps(asdict(reading)))
+            try:
+                event_data_batch.add(event_data)
+            except ValueError:
+                # Batch is full, send it and create a new one
+                self.producer.send_batch(event_data_batch)
+                event_data_batch = self.producer.create_batch()
+                event_data_batch.add(event_data)
+
+        if len(event_data_batch) > 0:
+            self.producer.send_batch(event_data_batch)
+    def close(self):
+        """Close the producer"""
+        self.producer.close()

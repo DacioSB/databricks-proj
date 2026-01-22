@@ -5,7 +5,7 @@
 # COMMAND ----------
 
 # Configuration
-storage_account_name = "sasctrafficdacio5"
+storage_account_name = "sasctrafficdacio6"
 container_names = ["bronze", "silver", "gold", "checkpoints"]
 mount_point_base = "/mnt/smartcity"
 

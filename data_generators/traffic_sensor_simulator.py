@@ -12,6 +12,12 @@ from dataclasses import dataclass, asdict
 from typing import List, Tuple
 import math
 
+#import azure.eventhub
+#import azure.core
+
+#print(azure.eventhub.__version__)
+#print(azure.core.__version__)
+
 @dataclass
 class Intersection:
     """Represents a traffic intersection"""
@@ -216,3 +222,59 @@ class EventHubPublisher:
     def close(self):
         """Close the producer"""
         self.producer.close()
+
+def main():
+    """
+    Main function
+    """
+    CONNECTION_STRING = dbutils.secrets.get(scope="smartcity-secrets", key="eventhub-connection-string")
+    EVENTHUB_NAME = "traffic-sensors"
+
+    city_grid = CityGrid(
+        city_center=(40.7128, -74.0060),  # New York City
+        grid_size=10
+    )
+    simulator = TrafficSimulator(city_grid)
+    publisher = EventHubPublisher(CONNECTION_STRING, EVENTHUB_NAME)
+
+    print(f"🚦 Traffic Simulator Started")
+    print(f"📍 Monitoring {len(city_grid.intersections)} intersections")
+    print(f"📡 Publishing to Event Hub: {EVENTHUB_NAME}")
+    print("-" * 60)
+
+    try:
+        iteration = 0
+        while True:
+            iteration += 1
+            current_time = datetime.now()
+
+            readings = []
+
+            for intersection in city_grid.intersections:
+                reading = simulator.generate_reading(intersection, current_time)
+                readings.append(reading)
+
+            publisher.send_batch(readings)
+
+            # Stats
+            total_vehicles = sum(r.vehicle_count for r in readings)
+            avg_speed = sum(r.average_speed for r in readings) / len(readings)
+            avg_occupancy = sum(r.occupancy_rate for r in readings) / len(readings)
+
+            print(f"[{current_time.strftime('%H:%M:%S')}] Iteration {iteration}")
+            print(f"  📊 Total Vehicles: {total_vehicles:,}")
+            print(f"  🚗 Avg Speed: {avg_speed:.1f} mph")
+            print(f"  📈 Avg Occupancy: {avg_occupancy:.1%}")
+            print(f"  ✉️  Events Sent: {len(readings)}")
+            print("-" * 60)
+
+            time.sleep(30)
+
+    except KeyboardInterrupt:
+        print("🚦 Traffic Simulator Stopped")
+    finally:
+        publisher.close()
+        print("🚦 Traffic Simulator Stopped")
+
+if __name__ == "__main__":
+    main()

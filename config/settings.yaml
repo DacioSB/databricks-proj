@@ -1,0 +1,393 @@
+# config/settings.yaml
+# Smart City Traffic Management - Centralized Configuration
+# Version: 1.0.0
+# Last Updated: 2026-01-15
+
+# ============================================================================
+# GLOBAL SETTINGS (Shared across all environments)
+# ============================================================================
+project:
+  name: "smart-city-traffic-management"
+  version: "1.0.0"
+  description: "Real-time traffic analytics platform using Azure Databricks"
+  team: "Data Engineering Team"
+  contact: "data-eng@example.com"
+
+# City Configuration
+simulation:
+  city:
+    name: "Metro City"
+    center:
+      latitude: 40.7128
+      longitude: -74.0060
+    timezone: "America/New_York"
+  
+  grid:
+    size: 10  # 10x10 = 100 intersections
+    spacing_km: 1.1  # Distance between intersections
+  
+  intervals:
+    sensor_update_seconds: 30
+    weather_update_seconds: 300  # 5 minutes
+    prediction_horizon_minutes: 60
+
+# Data Schema Versions (for evolution tracking)
+schemas:
+  traffic_sensor:
+    version: "1.0"
+    path: "schemas/traffic_sensor_v1.json"
+  weather:
+    version: "1.0"
+    path: "schemas/weather_v1.json"
+
+# ============================================================================
+# ENVIRONMENT-SPECIFIC SETTINGS
+# ============================================================================
+environments:
+  # -------------------------------------------------------------------------
+  # DEVELOPMENT ENVIRONMENT
+  # -------------------------------------------------------------------------
+  dev:
+    azure:
+      subscription_id: "${DEV_SUBSCRIPTION_ID}"  # From environment variable
+      resource_group: "umnovodb"
+      location: "eastus2"
+      tags:
+        Environment: "Development"
+        Project: "SmartCity"
+        CostCenter: "DataEngineering"
+        ManagedBy: "Terraform"
+    
+    storage:
+      account_name: "sasctrafficdacio8"
+      containers:
+        bronze: "bronze"
+        silver: "silver"
+        gold: "gold"
+        checkpoints: "checkpoints"
+        models: "models"
+        archive: "archive"
+      mount_points:
+        bronze: "/mnt/dev/smartcity/bronze"
+        silver: "/mnt/dev/smartcity/silver"
+        gold: "/mnt/dev/smartcity/gold"
+        checkpoints: "/mnt/dev/smartcity/checkpoints"
+    
+    keyvault:
+      name: "kv-smartcity-dacio8"
+      secrets:
+        eventhub_connection: "eventhub-connection-string"
+        storage_key: "storage-account-key"
+        databricks_token: "databricks-token"
+    
+    eventhub:
+      namespace: "ehn-dev-smartcity-dacio8"
+      hubs:
+        traffic_sensors: "traffic-sensors"
+        weather_events: "weather-events"
+        incidents: "incidents"
+      consumer_group: "$Default"
+      partitions: 4
+    
+    databricks:
+      workspace_url: "https://adb-7405612883284325.5.azuredatabricks.net"
+      #after 0=
+      workspace_id: "7405612883284325"
+      cluster:
+        id: "dev-cluster-001"
+        name: "dev-traffic-analytics"
+        node_type: "Standard_DS3_v2"
+        min_workers: 1
+        max_workers: 4
+        auto_terminate_minutes: 30
+      secret_scope: "smartcity-dev-secrets"
+    
+    simulation:
+      grid_size: 10  # Smaller for dev
+      duration_hours: 1  # Run for 1 hour only
+      data_generation_rate: 1  # 50% of production rate
+    
+    data_lifecycle:
+      bronze:
+        retention_days: 7
+      silver:
+        retention_days: 14
+      gold:
+        retention_days: 30
+    
+    features:
+      enable_ml_predictions: false  # Disable expensive operations in dev
+      enable_anomaly_detection: false
+      enable_geospatial_viz: true
+      enable_streaming: true
+
+  # -------------------------------------------------------------------------
+  # STAGING ENVIRONMENT
+  # -------------------------------------------------------------------------
+
+# ============================================================================
+# MEDALLION ARCHITECTURE CONFIGURATION
+# ============================================================================
+medallion:
+  bronze:
+    description: "Raw data from Event Hubs"
+    format: "delta"
+    mode: "append"
+    schema_enforcement: false  # Accept all incoming data
+    partition_by: ["year", "month", "day", "hour"]
+    optimize:
+      enabled: true
+      z_order_by: ["intersection_id", "timestamp"]
+    
+    tables:
+      traffic:
+        path_suffix: "traffic"
+        checkpoint_suffix: "traffic"
+      weather:
+        path_suffix: "weather"
+        checkpoint_suffix: "weather"
+  
+  silver:
+    description: "Cleansed and validated data"
+    format: "delta"
+    mode: "append"
+    schema_enforcement: true
+    partition_by: ["year", "month", "day"]
+    optimize:
+      enabled: true
+      z_order_by: ["intersection_id", "timestamp"]
+    
+    data_quality:
+      enable_quarantine: true
+      quarantine_table: "silver_quarantine"
+      validation_rules:
+        - "vehicle_count >= 0"
+        - "average_speed >= 0 AND average_speed <= 100"
+        - "occupancy_rate >= 0 AND occupancy_rate <= 1"
+        - "timestamp IS NOT NULL"
+    
+    tables:
+      traffic_enriched:
+        path_suffix: "traffic_enriched"
+        checkpoint_suffix: "traffic_enriched"
+        description: "Traffic data with weather and derived features"
+  
+  gold:
+    description: "Business-level aggregated tables"
+    format: "delta"
+    mode: "overwrite"  # Replace partitions
+    partition_by: ["year", "month"]
+    optimize:
+      enabled: true
+      z_order_by: ["district", "intersection_id"]
+    
+    tables:
+      hourly_summary:
+        path_suffix: "hourly_summary"
+        description: "Hourly aggregates by intersection"
+        aggregations:
+          - "AVG(vehicle_count) as avg_vehicles"
+          - "AVG(average_speed) as avg_speed"
+          - "MAX(queue_length) as max_queue"
+      
+      district_analytics:
+        path_suffix: "district_analytics"
+        description: "District-level KPIs"
+        aggregations:
+          - "SUM(vehicle_count) as total_vehicles"
+          - "AVG(average_speed) as avg_speed"
+      
+      intersection_metrics:
+        path_suffix: "intersection_metrics"
+        description: "Performance metrics per intersection"
+        window: "30 days"
+
+# ============================================================================
+# MACHINE LEARNING CONFIGURATION
+# ============================================================================
+ml:
+  feature_store:
+    database: "smartcity_features"
+    table: "traffic_features"
+    refresh_frequency: "hourly"
+  
+  models:
+    traffic_prediction:
+      name: "traffic_volume_predictor"
+      type: "regression"
+      algorithm: "xgboost"
+      target: "vehicle_count"
+      features:
+        - "hour_of_day"
+        - "day_of_week"
+        - "is_weekend"
+        - "is_holiday"
+        - "weather_condition"
+        - "temperature"
+        - "lag_1h_vehicle_count"
+        - "lag_24h_vehicle_count"
+        - "rolling_avg_7d"
+      
+      hyperparameters:
+        max_depth: 6
+        learning_rate: 0.1
+        n_estimators: 100
+        subsample: 0.8
+      
+      training:
+        frequency: "weekly"
+        lookback_days: 90
+        validation_split: 0.2
+      
+      performance_thresholds:
+        min_rmse: 10.0
+        min_r2: 0.7
+        max_mape: 15.0
+    
+    anomaly_detection:
+      name: "traffic_anomaly_detector"
+      algorithm: "isolation_forest"
+      contamination: 0.01  # Expect 1% anomalies
+      
+      features:
+        - "vehicle_count"
+        - "average_speed"
+        - "occupancy_rate"
+        - "queue_length"
+      
+      threshold: 0.95
+      
+      alerts:
+        enabled: true
+        severity_levels:
+          critical: 0.99
+          warning: 0.95
+          info: 0.90
+
+  mlflow:
+    tracking_uri: "databricks"
+    experiment_name: "/Shared/SmartCity/TrafficAnalytics"
+    artifact_location: "dbfs:/mnt/smartcity/mlflow"
+    
+    model_registry:
+      name: "smartcity_models"
+      staging_approval_required: true
+
+# ============================================================================
+# MONITORING & ALERTING
+# ============================================================================
+monitoring:
+  azure_monitor:
+    log_analytics_workspace: "log-smartcity-traffic"
+    application_insights: "appi-smartcity-traffic"
+  
+  metrics:
+    stream_lag:
+      threshold_seconds: 300  # Alert if lag > 5 minutes
+      severity: "critical"
+    
+    data_freshness:
+      threshold_minutes: 60  # Alert if no new data in 1 hour
+      severity: "critical"
+    
+    job_failures:
+      consecutive_failures: 2
+      severity: "critical"
+    
+    cost_threshold:
+      daily_limit_usd: 100
+      monthly_limit_usd: 3000
+      severity: "warning"
+  
+  alerts:
+    email:
+      enabled: true
+      recipients:
+        - "data-eng-team@example.com"
+        - "ops-team@example.com"
+    
+    sms:
+      enabled: true  # For critical alerts only
+      recipients:
+        - "+1-555-0100"
+    
+    slack:
+      enabled: false
+      webhook_url_secret: "slack-webhook-url"
+      channel: "#smartcity-alerts"
+
+# ============================================================================
+# VISUALIZATION & DASHBOARDS
+# ============================================================================
+dashboards:
+  databricks_sql:
+    refresh_interval_minutes: 5
+    queries_path: "dashboards/sql"
+  
+  power_bi:
+    workspace: "SmartCity Analytics"
+    refresh_schedule: "hourly"
+    gateway: "smartcity-gateway"
+  
+  geospatial:
+    library: "folium"
+    output_path: "dashboards/maps"
+    refresh_interval_minutes: 15
+    
+    heatmap:
+      metric: "occupancy_rate"
+      color_scale: "RdYlGn_r"  # Red-Yellow-Green reversed
+      radius: 20
+
+# ============================================================================
+# CI/CD CONFIGURATION
+# ============================================================================
+cicd:
+  git:
+    repository: "https://github.com/your-org/smartcity-traffic"
+    branch_strategy:
+      main: "production"
+      develop: "staging"
+      feature: "dev"
+  
+  testing:
+    unit_tests: true
+    integration_tests: true
+    data_quality_tests: true
+    
+    coverage_threshold: 80
+  
+  deployment:
+    strategy: "blue-green"
+    rollback_enabled: true
+    
+    approval_required:
+      staging: false
+      production: true
+    
+    smoke_tests:
+      enabled: true
+      duration_minutes: 10
+
+# ============================================================================
+# COST OPTIMIZATION
+# ============================================================================
+cost:
+  cluster:
+    auto_terminate_minutes: 120
+    spot_instances_percentage: 50
+    
+    schedules:
+      weekdays: "8:00-18:00"
+      weekends: "off"
+  
+  storage:
+    lifecycle_policies:
+      bronze_to_cool: 30  # Move to cool tier after 30 days
+      silver_to_cool: 90
+      archive_after: 180
+  
+  budget:
+    daily_limit: 100
+    monthly_limit: 3000
+    alerts_at_percentage: [50, 75, 90]

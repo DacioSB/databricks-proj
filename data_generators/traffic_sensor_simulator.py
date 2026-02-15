@@ -11,12 +11,15 @@ from azure.eventhub import EventHubProducerClient, EventData
 from dataclasses import dataclass, asdict
 from typing import List, Tuple
 import math
+from utils.config_loader import get_config
 
 #import azure.eventhub
 #import azure.core
 
 #print(azure.eventhub.__version__)
 #print(azure.core.__version__)
+
+config = get_config()
 
 @dataclass
 class Intersection:

@@ -84,15 +84,202 @@ class TrafficDataValidator:
     def __init__(self):
         self.stats = ValidationStats()
 
-    def _validate_schema(self, message: Dict) -> List[str]:
+    def _validate_schema(self, data: Dict) -> List[str]:
+        """Validate schema: required fields and data types"""
         errors = []
+        
         for field_name, field_type in self.REQUIRED_FIELDS.items():
-            if field_name not in message:
-                errors.append(f"Missing field: {field_name}")
+            # Check if field exists
+            if field_name not in data:
+                errors.append(f"Missing required field: '{field_name}'")
                 continue
-            if message[field_name] is None:
-                errors.append(f"Null field: {field_name}")
+            
+            # Check if field is null
+            if data[field_name] is None:
+                errors.append(f"Field '{field_name}' is null")
                 continue
-            if not isinstance(message[field_name], field_type):
-                errors.append(f"Invalid type for field {field_name}: {type(message[field_name])} (expected {field_type})")
+            
+            # Check data type
+            if not isinstance(data[field_name], field_type):
+                errors.append(
+                    f"Field '{field_name}' has wrong type. "
+                    f"Expected {field_type.__name__}, got {type(data[field_name]).__name__}"
+                )
+        
+        # Validate vehicle_types structure
+        if 'vehicle_types' in data and isinstance(data['vehicle_types'], dict):
+            expected_keys = {'car', 'truck', 'motorcycle', 'bus'}
+            actual_keys = set(data['vehicle_types'].keys())
+            
+            if actual_keys != expected_keys:
+                missing = expected_keys - actual_keys
+                extra = actual_keys - expected_keys
+                if missing:
+                    errors.append(f"vehicle_types missing keys: {missing}")
+                if extra:
+                    errors.append(f"vehicle_types has unexpected keys: {extra}")
+        
         return errors
+
+    def _validate_value_ranges(self, data: Dict) -> List[str]:
+        """Validate value ranges and enums"""
+        errors = []
+        for field_name, (min, max) in self.VALUE_RANGES.items():
+            if field_name in data:
+                value = data[field_name]
+                if not (min <= value <= max):
+                    errors.append(f"Value for '{field_name}' is out of range: {value}")
+        for field_name, values in self.VALID_ENUMS.items():
+            if field_name in data:
+                value = data[field_name]
+                if value not in values:
+                    errors.append(f"Value for '{field_name}' is not valid: {value}")
+        
+        if "timestamp" in data:
+            try:
+                datetime.fromisoformat(data["timestamp"])
+            except ValueError:
+                errors.append(f"Invalid timestamp format: {data['timestamp']}")
+        
+        if 'vehicle_types' in data and isinstance(data['vehicle_types'], dict):
+            total_from_types = sum(data['vehicle_types'].values())
+            if 'vehicle_count' in data:
+                if abs(total_from_types - data['vehicle_count']) > 2:  # Allow small rounding errors
+                    errors.append(
+                        f"vehicle_count ({data['vehicle_count']}) doesn't match "
+                        f"sum of vehicle_types ({total_from_types})"
+                    )
+        
+        return errors
+    def update_stats(self, is_valid: bool, errors: List[str], data: Dict):
+        """Update validation statistics"""
+        self.stats.total_messages += 1
+        if is_valid:
+            self.stats.valid_messages += 1
+            # sample
+            if len(self.stats.sample_messages) < 5:
+                self.stats.sample_messages.append(data)
+        else:
+            self.stats.invalid_messages += 1
+
+            for error in errors:
+                if 'Missing required field' in error or 'wrong type' in error:
+                    self.stats.schema_errors += 1
+                elif 'out of range' in error or 'invalid value' in error:
+                    self.stats.value_errors += 1
+                elif 'null' in error:
+                    self.stats.null_errors += 1
+            
+            if len(self.stats.sample_errors) < 10:
+                self.stats.sample_errors.append({
+                    'data': data,
+                    'errors': errors
+                })
+
+class WeatherDataValidator:
+    """Validates weather data from Event Hub"""
+    
+    REQUIRED_FIELDS = {
+        'station_id': str,
+        'timestamp': str,
+        'temperature_f': float,
+        'humidity': float,
+        'precipitation_rate': float,
+        'visibility_miles': float,
+        'wind_speed_mph': float,
+        'condition': str,
+        'latitude': float,
+        'longitude': float
+    }
+    
+    VALUE_RANGES = {
+        'temperature_f': (-50, 150),
+        'humidity': (0.0, 1.0),
+        'precipitation_rate': (0.0, 10.0),  # inches/hour
+        'visibility_miles': (0.0, 20.0),
+        'wind_speed_mph': (0.0, 150.0),
+        'latitude': (-90, 90),
+        'longitude': (-180, 180)
+    }
+    
+    VALID_ENUMS = {
+        'condition': ['clear', 'cloudy', 'rain', 'heavy_rain', 'snow', 'fog']
+    }
+    
+    def __init__(self):
+        self.stats = ValidationStats()
+    
+    def validate_message(self, message_body: str) -> Tuple[bool, List[str]]:
+        """Validate a weather message"""
+        errors = []
+        
+        try:
+            data = json.loads(message_body)
+        except json.JSONDecodeError as e:
+            return False, [f"JSON parsing error: {str(e)}"]
+        
+        # Schema validation
+        for field_name, field_type in self.REQUIRED_FIELDS.items():
+            if field_name not in data:
+                errors.append(f"Missing required field: '{field_name}'")
+                continue
+            
+            if data[field_name] is None:
+                errors.append(f"Field '{field_name}' is null")
+                continue
+            
+            if not isinstance(data[field_name], field_type):
+                errors.append(
+                    f"Field '{field_name}' has wrong type. "
+                    f"Expected {field_type.__name__}, got {type(data[field_name]).__name__}"
+                )
+        
+        # Value validation
+        for field_name, (min_val, max_val) in self.VALUE_RANGES.items():
+            if field_name in data:
+                value = data[field_name]
+                if not (min_val <= value <= max_val):
+                    errors.append(
+                        f"Field '{field_name}' value {value} is out of range [{min_val}, {max_val}]"
+                    )
+        
+        for field_name, valid_values in self.VALID_ENUMS.items():
+            if field_name in data:
+                value = data[field_name]
+                if value not in valid_values:
+                    errors.append(
+                        f"Field '{field_name}' has invalid value '{value}'. "
+                        f"Must be one of: {valid_values}"
+                    )
+        
+        return len(errors) == 0, errors
+    
+    def update_stats(self, is_valid: bool, errors: List[str], message_data: Dict):
+        """Update validation statistics"""
+        self.stats.total_messages += 1
+        
+        if is_valid:
+            self.stats.valid_messages += 1
+            if len(self.stats.sample_messages) < 5:
+                self.stats.sample_messages.append(message_data)
+        else:
+            self.stats.invalid_messages += 1
+            if len(self.stats.error_messages) < 10:
+                self.stats.error_messages.append({
+                    'data': message_data,
+                    'errors': errors
+                })
+
+class EventHubDataValidator:
+    """Main validator that consumes from Event Hubs and validates data"""
+    def __init__(
+        self,
+        eventhub_namespace: str,
+        eventhub_name: str,
+        consumer_group: str = "$Default",
+        use_key_vault: bool = True,
+        keyvault_name: Optional[str] = None,
+        connection_string_secret: Optional[str] = None,
+        connection_string: Optional[str] = None
+    ):
+        pass
